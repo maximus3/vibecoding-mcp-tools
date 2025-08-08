@@ -1,0 +1,99 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.12.4",
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.11.7",
+    "pyqt6>=6.9.1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.8",
+]
+
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+preview = true
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["ALL"]
+ignore = [
+    "PLR0911",  # Too many return statements
+    "PLR0914",  # Too many local variables
+    "PLR0912",  # Too many branches
+    "PLE1205",
+    "PLR6301",
+    "PLR0917",  # Too many positional arguments
+    "PLR0913",  # Too many arguments in function definition
+    "PLR1702",  # Too many nested blocks
+    "PLR0915",  # Too many statements
+    "UP008",    # Use `super()` instead of `super(__class__, self)`
+    "UP015",    # Unnecessary mode argument
+    "N805",     # First argument of a method should be named `self`
+    "Q000",     # Single quotes found but double quotes preferred
+    "ANN401",   # Dynamically typed expressions (typing.Any) are disallowed in `*_`
+    "D100",     # Missing docstring in public module
+    "D101",     # Missing docstring in public class
+    "D102",     # issing docstring in public method
+    "D103",     # Missing docstring in public function
+    "D104",     # Missing docstring in public package
+    "D105",     # Missing docstring in magic method
+    "D106",     # Missing docstring in public nested class
+    "D107",     # Missing docstring in `__init__`
+    "D203",     # incorrect-blank-line-before-class
+    "D213",     # multi-line-summary-second-line
+    "CPY001",   # Missing copyright notice at top of file
+    "PTH123",   # `open()` should be replaced by `Path.open()`
+    "FURB101",  # `open` and `read` should be replaced by `Path(...).read_text(encoding='utf-8')`
+    "COM812",   # missing-trailing-comma, WARN The following rule may cause conflicts when used with the formatter
+    "FIX002",   # Line contains TODO, consider resolving the issue
+    "TD002",    # Missing author in TODO; try: `# TODO(<author_name>): ...` or `# TODO @<author_name>: ...`
+    "TD003",    # Missing issue link for this TODO
+    "RUF001",   # String contains ambiguous `...`. Did you mean `...`?
+    "RUF002",   # Docstring contains ambiguous `...`. Did you mean `...`?
+    "RUF003",   # Comment contains ambiguous `...`. Did you mean `...`?
+    "EM101",    # Exception must not use a string literal, assign to variable first
+    "TRY003",   # Avoid specifying long messages outside the exception class
+    "DOC201",   # `return` is not documented in docstring
+    "DOC501",   # Raised exception `...` missing from docstring
+]
+
+# Avoid trying to fix flake8-bugbear (`B`) violations.
+ unfixable = []
+
+[tool.ruff.lint.pycodestyle]
+max-line-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = ["tests","app","frontend"]
+lines-after-imports = 2
+section-order = ['future', 'standard-library', 'third-party', 'first-party', 'local-folder']
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",     # Use of `assert` detected
+    "ANN001",   # Missing type annotation for function argument `state`
+]
+"app/database/migrator/versions/**/*.py" = [
+   "INP001",  # File `...` is part of an implicit namespace package. Add an `__init__.py`.
+]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.flake8-import-conventions]
+# Declare the banned `from` imports.
+banned-from = ["typing", "pathlib", "contextlib", "io", "datetime"]
+
+[tool.ruff.format]
+# 5. Use single quotes for non-triple-quoted strings.
+quote-style = "single"
