@@ -105,7 +105,7 @@ def create_server() -> fastmcp_server.FastMCP:
         }
         payload_bytes = json.dumps(payload, ensure_ascii=False).encode('utf-8')
 
-        # Запускаем дочерний процесс с этим же модулем и спец-режимом --dialog
+        # Запускаем дочерний процесс с этим же модулем и спец-режимом --local
         python_exe = sys.executable
         module_path = str(pathlib.Path(__file__).resolve())
 
@@ -115,7 +115,7 @@ def create_server() -> fastmcp_server.FastMCP:
             python_exe,
             '-u',
             module_path,
-            '--dialog',
+            '--local',
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -135,12 +135,14 @@ def create_server() -> fastmcp_server.FastMCP:
         return_code = proc.returncode
         logger.info('Диалог завершён: return_code=%s', return_code)
         if return_code != 0:
-            # 2 — пользователь закрыл окно без отправки
-            if return_code == 2:  # noqa: PLR2004
+            # Расшифруем stderr заранее
+            stderr_text = errs.decode('utf-8', errors='replace') if errs else ''
+            # 2 — может означать закрытие окна пользователем или системную ошибку аргументов
+            # (argparse тоже возвращает 2)
+            if return_code == 2 and not stderr_text.strip():  # noqa: PLR2004
                 logger.warning('Пользователь закрыл окно без отправки ответа')
                 raise RuntimeError('Диалог закрыт пользователем без отправки ответа.')
             # Иная ошибка — пробросим stderr для диагностики
-            stderr_text = errs.decode('utf-8', errors='replace') if errs else ''
             logger.error('Ошибка диалога (код %s): %s', return_code, stderr_text.strip())
             raise RuntimeError(f'Ошибка диалога (код {return_code}). {stderr_text}'.strip())
 
@@ -185,6 +187,16 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
 
         start_monotonic = time.monotonic()
         app = QtWidgets.QApplication([])
+        try:
+            screens = QtWidgets.QApplication.screens()
+            primary = QtGui.QGuiApplication.primaryScreen()
+            logger.info(
+                'GUI env: screens=%s, primary=%s',
+                len(screens) if screens is not None else 'None',
+                getattr(primary, 'name', lambda: 'None')(),
+            )
+        except Exception:
+            logger.exception('Не удалось получить информацию об экранах')
 
         dialog = QtWidgets.QDialog()
         dialog.setWindowTitle('Ответьте на вопрос')
@@ -332,6 +344,11 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
                 'source': 'text',
                 'duration_ms': duration_ms_local,
             }
+            logger.info(
+                'Отправка ответа пользователем: %s символов, duration_ms=%s',
+                len(text_value),
+                duration_ms_local,
+            )
             sys.stdout.write(json.dumps(result, ensure_ascii=False))
             sys.stdout.flush()
             dialog.accept()
@@ -357,15 +374,29 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
 
         # Обработка закрытия окна крестиком
         class _Filter(QtCore.QObject):
-            def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # noqa: N802
-                if event.type() == QtCore.QEvent.Type.Close and not submitted_flag['value']:
-                    # пометим как отмену
+            def eventFilter(self, watched: QtCore.QObject | None, event: QtCore.QEvent | None) -> bool:  # noqa: N802
+                if event is not None and event.type() == QtCore.QEvent.Type.Close and not submitted_flag['value']:
+                    logger.info('Диалог закрыт (QEvent.Close) без отправки')
                     submitted_flag['value'] = False
                 return super().eventFilter(watched, event)
 
         flt = _Filter(dialog)
         dialog.installEventFilter(flt)
 
+        def on_rejected() -> None:
+            logger.info('Диалог отклонён пользователем (rejected)')
+
+        def on_accepted() -> None:
+            logger.info('Диалог подтверждён (accepted)')
+
+        def on_finished(code: int) -> None:
+            logger.info('Диалог завершён (finished), code=%s', code)
+
+        dialog.rejected.connect(on_rejected)  # type: ignore[arg-type]
+        dialog.accepted.connect(on_accepted)  # type: ignore[arg-type]
+        dialog.finished.connect(on_finished)  # type: ignore[arg-type]
+
+        logger.info('Показываем диалоговое окно пользователю')
         dialog.show()
         # Фокус сразу в поле ввода
         try:
@@ -374,7 +405,9 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
             logger.exception('Ошибка фокуса в поле ввода')
             with contextlib.suppress(Exception):
                 text_edit.setFocus()
+        logger.info('Старт цикла событий Qt')
         app.exec()
+        logger.info('Цикл событий Qt завершён; submitted=%s', submitted_flag['value'])
 
         return 0 if submitted_flag['value'] else 2
 
