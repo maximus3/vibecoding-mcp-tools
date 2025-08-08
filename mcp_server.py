@@ -109,7 +109,7 @@ def create_server() -> fastmcp_server.FastMCP:
         python_exe = sys.executable
         module_path = str(pathlib.Path(__file__).resolve())
 
-        logger.info('Запуск диалога (timeout=%s c)...', timeout_seconds)
+        logger.debug('Запуск диалога (timeout=%s c)...', timeout_seconds)
 
         proc = await asyncio.create_subprocess_exec(
             python_exe,
@@ -133,7 +133,7 @@ def create_server() -> fastmcp_server.FastMCP:
 
         # Проверим код возврата дочернего процесса
         return_code = proc.returncode
-        logger.info('Диалог завершён: return_code=%s', return_code)
+        logger.debug('Диалог завершён: return_code=%s', return_code)
         if return_code != 0:
             # Расшифруем stderr заранее
             stderr_text = errs.decode('utf-8', errors='replace') if errs else ''
@@ -190,7 +190,7 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
         try:
             screens = QtWidgets.QApplication.screens()
             primary = QtGui.QGuiApplication.primaryScreen()
-            logger.info(
+            logger.debug(
                 'GUI env: screens=%s, primary=%s',
                 len(screens) if screens is not None else 'None',
                 getattr(primary, 'name', lambda: 'None')(),
@@ -344,7 +344,7 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
                 'source': 'text',
                 'duration_ms': duration_ms_local,
             }
-            logger.info(
+            logger.debug(
                 'Отправка ответа пользователем: %s символов, duration_ms=%s',
                 len(text_value),
                 duration_ms_local,
@@ -376,7 +376,7 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
         class _Filter(QtCore.QObject):
             def eventFilter(self, watched: QtCore.QObject | None, event: QtCore.QEvent | None) -> bool:  # noqa: N802
                 if event is not None and event.type() == QtCore.QEvent.Type.Close and not submitted_flag['value']:
-                    logger.info('Диалог закрыт (QEvent.Close) без отправки')
+                    logger.debug('Диалог закрыт (QEvent.Close) без отправки')
                     submitted_flag['value'] = False
                 return super().eventFilter(watched, event)
 
@@ -384,19 +384,19 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
         dialog.installEventFilter(flt)
 
         def on_rejected() -> None:
-            logger.info('Диалог отклонён пользователем (rejected)')
+            logger.debug('Диалог отклонён пользователем (rejected)')
 
         def on_accepted() -> None:
-            logger.info('Диалог подтверждён (accepted)')
+            logger.debug('Диалог подтверждён (accepted)')
 
         def on_finished(code: int) -> None:
-            logger.info('Диалог завершён (finished), code=%s', code)
+            logger.debug('Диалог завершён (finished), code=%s', code)
 
         dialog.rejected.connect(on_rejected)  # type: ignore[arg-type]
         dialog.accepted.connect(on_accepted)  # type: ignore[arg-type]
         dialog.finished.connect(on_finished)  # type: ignore[arg-type]
 
-        logger.info('Показываем диалоговое окно пользователю')
+        logger.debug('Показываем диалоговое окно пользователю')
         dialog.show()
         # Фокус сразу в поле ввода
         try:
@@ -405,9 +405,9 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
             logger.exception('Ошибка фокуса в поле ввода')
             with contextlib.suppress(Exception):
                 text_edit.setFocus()
-        logger.info('Старт цикла событий Qt')
+        logger.debug('Старт цикла событий Qt')
         app.exec()
-        logger.info('Цикл событий Qt завершён; submitted=%s', submitted_flag['value'])
+        logger.debug('Цикл событий Qt завершён; submitted=%s', submitted_flag['value'])
 
         return 0 if submitted_flag['value'] else 2
 
@@ -420,7 +420,7 @@ def _run_dialog_from_stdin() -> int:  # noqa: C901
         return 1
 
     # 2) Открываем окно
-    logger.info('Диалог: окно открыто')
+    logger.debug('Диалог: окно открыто')
     return open_dialog_window(params)
 
 
