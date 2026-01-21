@@ -10,5 +10,8 @@ wheels/
 .ruff_cache/
 .logs/
 
+# MCP Proxy config (может содержать пути к приватным серверам)
+proxy_config.json
+
 # Virtual environments
 .venv

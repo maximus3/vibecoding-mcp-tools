@@ -1,11 +1,18 @@
-### vibecoding-mcp-tools — локальные MCP‑серверы с тулой ask_user
+### vibecoding-mcp-tools — локальные MCP‑серверы
 
-Набор локальных MCP‑серверов, предоставляющих единую тулу `ask_user` для запроса ответа у человека.
-Две реализации UI:
-- Web: FastAPI + Uvicorn + системный браузер (поддерживает текст и голос через Web Speech API).
-- GUI: локальное окно на PyQt6 (только текст).
+Набор локальных MCP‑серверов:
 
-Обе версии работают по stdio и подходят для интеграции с Cursor MCP.
+1. **ask_user** — интерактивный запрос ответа у пользователя
+   - Web: FastAPI + Uvicorn + системный браузер (текст и голос через Web Speech API)
+   - GUI: локальное окно на PyQt6 (только текст)
+
+2. **mcp-proxy** — агрегатор тулов из нескольких MCP серверов
+   - Объединяет тулы из разных MCP бинарников
+   - GUI для выбора тулов (PyQt6)
+   - Автоматическая сборка бинарников
+   - Поддержка любых систем сборки (ya make, cargo, go build и т.д.)
+
+Все версии работают по stdio и подходят для интеграции с Cursor MCP.
 
 ### Требования
 - Python >= 3.12
@@ -37,7 +44,7 @@ uv run --directory /Users/imaximus3/personal/vibecoding-mcp-tools mcp_server.py
 ```
 
 ### Интеграция с Cursor MCP
-Добавьте конфигурацию в `~/.cursor/mcp.json`. Можно включить обе реализации сразу:
+Добавьте конфигурацию в `~/.cursor/mcp.json`:
 
 ```json
 {
@@ -59,6 +66,15 @@ uv run --directory /Users/imaximus3/personal/vibecoding-mcp-tools mcp_server.py
         "/Users/imaximus3/personal/vibecoding-mcp-tools",
         "mcp_server.py"
       ]
+    },
+    "mcp-proxy": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/Users/imaximus3/personal/vibecoding-mcp-tools",
+        "mcp_proxy_server.py"
+      ]
     }
   }
 }
@@ -67,6 +83,7 @@ uv run --directory /Users/imaximus3/personal/vibecoding-mcp-tools mcp_server.py
 Имена серверов:
 - Web: `ask-user-mcp` (в коде: `name='ask-user-mcp'`)
 - GUI: `ask-user-mcp-local` (в коде: `name='ask-user-mcp-local'`)
+- Proxy: `mcp-proxy` (в коде: `name='mcp-proxy'`)
 
 ### Локальная проверка (без MCP)
 Готовые команды:
@@ -131,6 +148,137 @@ printf '%s' '{"question":"CLI: проверьте отправку ответа"
 Файлы логов пишутся в каталог `.logs/` рядом с проектом:
 - Web: `.logs/mcp_server_web.log`
 - GUI: `.logs/mcp_server.log`
+
+---
+
+## MCP Proxy Server
+
+### Назначение
+MCP Proxy Server агрегирует тулы из нескольких внешних MCP серверов (бинарников) и позволяет:
+- Объединять тулы из разных источников в единый MCP сервер
+- Выбирать какие тулы экспортировать через GUI
+- Автоматически собирать бинарники при необходимости
+- Поддерживать любые системы сборки (ya make, cargo, go build, npm run build и т.д.)
+
+### Конфигурация
+
+Создайте файл `proxy_config.json` в корне проекта:
+
+```json
+{
+  "servers": [
+    {
+      "name": "my-server",
+      "binary": "/path/to/mcp-server-binary",
+      "build_command": "cargo build --release",
+      "build_cwd": "/path/to/project",
+      "args": ["--option", "value"]
+    },
+    {
+      "name": "another-server",
+      "binary": "/path/to/another-binary",
+      "build_command": null,
+      "build_cwd": null,
+      "args": []
+    }
+  ],
+  "enabled_tools": []
+}
+```
+
+**Параметры сервера:**
+- `name` — имя сервера (для отображения)
+- `binary` — путь к бинарнику MCP сервера
+- `build_command` — команда сборки (опционально, например: `ya make -r`, `cargo build --release`)
+- `build_cwd` — рабочая директория для сборки (опционально)
+- `args` — аргументы для запуска бинарника
+- `enabled_tools` — список включённых тулов (пустой = все включены)
+
+### Использование
+
+**Список доступных тулов:**
+```bash
+make proxy-list
+# или
+uv run mcp_proxy_server.py --list-tools
+```
+
+**GUI конфигуратор (выбор тулов):**
+```bash
+make proxy-configure
+# или
+uv run mcp_proxy_server.py --configure
+```
+
+**Пересборка всех бинарников:**
+```bash
+make proxy-rebuild
+# или
+uv run mcp_proxy_server.py --rebuild
+```
+
+**Тест MCP протокола:**
+```bash
+make proxy-test
+# или
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | uv run mcp_proxy_server.py
+```
+
+**Запуск proxy сервера:**
+```bash
+uv run mcp_proxy_server.py
+```
+
+### Примеры конфигурации
+
+**Arcadia devtools-mcp:**
+```json
+{
+  "name": "arcadia",
+  "binary": "/Users/user/arcadia/devtools/mcp/bin/devtools-mcp",
+  "build_command": "ya make -r",
+  "build_cwd": "/Users/user/arcadia/devtools/mcp/bin",
+  "args": ["--arcadia", "/Users/user/arcadia"]
+}
+```
+
+**Rust проект:**
+```json
+{
+  "name": "rust-mcp",
+  "binary": "/path/to/project/target/release/mcp-server",
+  "build_command": "cargo build --release",
+  "build_cwd": "/path/to/project",
+  "args": []
+}
+```
+
+**Go проект:**
+```json
+{
+  "name": "go-mcp",
+  "binary": "/path/to/project/bin/mcp-server",
+  "build_command": "go build -o bin/mcp-server ./cmd/server",
+  "build_cwd": "/path/to/project",
+  "args": []
+}
+```
+
+**Без сборки (готовый бинарник):**
+```json
+{
+  "name": "prebuilt",
+  "binary": "/usr/local/bin/mcp-server",
+  "build_command": null,
+  "build_cwd": null,
+  "args": []
+}
+```
+
+### Логи
+Логи пишутся в `.logs/mcp_proxy_server.log`
+
+---
 
 ### Разработка
 Полезные команды:
