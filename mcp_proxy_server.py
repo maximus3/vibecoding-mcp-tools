@@ -17,8 +17,11 @@ import subprocess
 import sys
 import typing
 
-import mcp.server.fastmcp.server as fastmcp_server
+import anyio
+import mcp.server.stdio
+import mcp.types
 import pydantic
+from mcp.server import Server
 from PyQt6 import QtWidgets
 
 
@@ -30,6 +33,8 @@ class ServerConfig(pydantic.BaseModel):
     build_command: str | None = None
     build_cwd: str | None = None
     args: list[str] = pydantic.Field(default_factory=list)
+    timeout: int = 30  # Таймаут на получение списка тулов (секунды)
+    call_timeout: int = 300  # Таймаут на вызов тулы (секунды)
 
 
 class ProxyConfig(pydantic.BaseModel):
@@ -200,24 +205,67 @@ async def get_tools_from_server(server: ServerConfig) -> list[ToolInfo]:
     request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list', 'params': {}}
     request_bytes = (json.dumps(request) + '\n').encode('utf-8')
 
-    # Объединяем все запросы
-    all_requests = init_bytes + initialized_bytes + request_bytes
-
+    # Отправляем все запросы НЕ закрывая stdin
     try:
-        stdout_data, stderr_data = await asyncio.wait_for(proc.communicate(input=all_requests), timeout=30.0)
+        if proc.stdin:
+            proc.stdin.write(init_bytes)
+            await proc.stdin.drain()
+            proc.stdin.write(initialized_bytes)
+            await proc.stdin.drain()
+            proc.stdin.write(request_bytes)
+            await proc.stdin.drain()
+
+        # Читаем ответы с буфером до получения нужного response с id=1
+        async def read_until_response() -> str:
+            if not proc.stdout:
+                return ''
+            buffer = b''
+            found_response = False
+
+            while not found_response:
+                # Читаем чанками
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
+                    break
+                buffer += chunk
+
+                # Пытаемся найти ответ с id=1
+                try:
+                    text = buffer.decode('utf-8', errors='replace')
+                    lines = text.split('\n')
+                    for line in lines:
+                        if not line.strip():
+                            continue
+                        try:
+                            obj = json.loads(line.strip())
+                            if obj.get('id') == 1:
+                                found_response = True
+                                break
+                        except json.JSONDecodeError:
+                            continue
+                except UnicodeDecodeError:
+                    continue
+
+            return buffer.decode('utf-8', errors='replace')
+
+        stdout_text = await asyncio.wait_for(read_until_response(), timeout=float(server.timeout))
     except TimeoutError as exc:
-        logger.exception('Таймаут получения тулов от %s', server.name)
+        logger.exception('Таймаут получения тулов от %s (timeout=%s)', server.name, server.timeout)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        raise TimeoutError(f'Таймаут получения тулов от {server.name}') from exc
+        raise TimeoutError(f'Таймаут получения тулов от {server.name} ({server.timeout}s)') from exc
+    finally:
+        # Закрываем процесс
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
 
-    if proc.returncode != 0:
-        stderr_text = stderr_data.decode('utf-8', errors='replace') if stderr_data else ''
-        logger.error('Ошибка получения тулов от %s (код %s): %s', server.name, proc.returncode, stderr_text)
-        raise RuntimeError(f'Ошибка получения тулов от {server.name}: {stderr_text}')
-
-    # Парсим ответ
-    stdout_text = stdout_data.decode('utf-8', errors='replace') if stdout_data else ''
+    # Парсим ответ (stdout_text уже получен выше)
     try:
         # MCP может вернуть несколько JSON объектов, разделённых переводом строки
         lines = [line.strip() for line in stdout_text.strip().split('\n') if line.strip()]
@@ -301,25 +349,71 @@ async def call_tool_on_server(server: ServerConfig, tool_name: str, arguments: d
 
     # Отправляем запрос tools/call
     request = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': tool_name, 'arguments': arguments}}
+    logger.debug('Отправка запроса на %s: %s', server.name, json.dumps(request, ensure_ascii=False))
     request_bytes = (json.dumps(request) + '\n').encode('utf-8')
 
-    all_requests = init_bytes + initialized_bytes + request_bytes
-
+    # Отправляем все запросы НЕ закрывая stdin
     try:
-        stdout_data, stderr_data = await asyncio.wait_for(proc.communicate(input=all_requests), timeout=300.0)
+        if proc.stdin:
+            proc.stdin.write(init_bytes)
+            await proc.stdin.drain()
+            proc.stdin.write(initialized_bytes)
+            await proc.stdin.drain()
+            proc.stdin.write(request_bytes)
+            await proc.stdin.drain()
+
+        # Читаем ответы с буфером до получения нужного response с id=1
+        async def read_until_response() -> str:
+            if not proc.stdout:
+                return ''
+            buffer = b''
+            found_response = False
+
+            while not found_response:
+                # Читаем чанками
+                chunk = await proc.stdout.read(8192)
+                if not chunk:
+                    break
+                buffer += chunk
+
+                # Пытаемся найти ответ с id=1
+                try:
+                    text = buffer.decode('utf-8', errors='replace')
+                    lines = text.split('\n')
+                    for line in lines:
+                        if not line.strip():
+                            continue
+                        try:
+                            obj = json.loads(line.strip())
+                            if obj.get('id') == 1:
+                                found_response = True
+                                break
+                        except json.JSONDecodeError:
+                            continue
+                except UnicodeDecodeError:
+                    continue
+
+            return buffer.decode('utf-8', errors='replace')
+
+        stdout_text = await asyncio.wait_for(read_until_response(), timeout=float(server.call_timeout))
     except TimeoutError as exc:
-        logger.exception('Таймаут вызова тулы %s на %s', tool_name, server.name)
+        logger.exception('Таймаут вызова тулы %s на %s (timeout=%s)', tool_name, server.name, server.call_timeout)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        raise TimeoutError(f'Таймаут вызова тулы {tool_name} на {server.name}') from exc
+        raise TimeoutError(f'Таймаут вызова тулы {tool_name} на {server.name} ({server.call_timeout}s)') from exc
+    finally:
+        # Закрываем процесс
+        with contextlib.suppress(ProcessLookupError):
+            proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
 
-    if proc.returncode != 0:
-        stderr_text = stderr_data.decode('utf-8', errors='replace') if stderr_data else ''
-        logger.error('Ошибка вызова тулы %s на %s (код %s): %s', tool_name, server.name, proc.returncode, stderr_text)
-        raise RuntimeError(f'Ошибка вызова тулы {tool_name} на {server.name}: {stderr_text}')
-
-    # Парсим ответ
-    stdout_text = stdout_data.decode('utf-8', errors='replace') if stdout_data else ''
+    # Парсим ответ (stdout_text уже получен выше)
+    logger.debug('Получен ответ от %s: %s', server.name, stdout_text[:500])
     try:
         lines = [line.strip() for line in stdout_text.strip().split('\n') if line.strip()]
         response = None
@@ -343,6 +437,7 @@ async def call_tool_on_server(server: ServerConfig, tool_name: str, arguments: d
 
         result = response.get('result', {})
         logger.info('Тула %s на %s вызвана успешно', tool_name, server.name)
+        logger.debug('Результат от %s: %s', server.name, json.dumps(result, ensure_ascii=False)[:500])
         return result
 
     except Exception:
@@ -475,12 +570,9 @@ async def list_all_tools(config: ProxyConfig) -> list[ToolInfo]:
     return all_tools
 
 
-def create_proxy_server(config: ProxyConfig, all_tools: list[ToolInfo]) -> fastmcp_server.FastMCP:
+def create_proxy_server(config: ProxyConfig, all_tools: list[ToolInfo]) -> Server:
     """Создаёт MCP Proxy сервер."""
-    server = fastmcp_server.FastMCP(
-        name='mcp-proxy',
-        instructions='MCP Proxy Server: агрегирует тулы из нескольких MCP серверов.',
-    )
+    server = Server('mcp-proxy')
 
     # Фильтруем тулы согласно enabled_tools
     enabled_tools = all_tools
@@ -497,27 +589,66 @@ def create_proxy_server(config: ProxyConfig, all_tools: list[ToolInfo]) -> fastm
                 tool_to_server[tool.name] = srv
                 break
 
-    # Регистрируем каждую тулу
-    for tool in enabled_tools:
-        srv = tool_to_server.get(tool.name)
+    # Регистрируем handler для list_tools
+    @server.list_tools()
+    async def handle_list_tools() -> list[mcp.types.Tool]:
+        tools = []
+        for tool in enabled_tools:
+            tools.append(
+                mcp.types.Tool(
+                    name=tool.name,
+                    description=tool.description,
+                    inputSchema=tool.input_schema,
+                )
+            )
+        return tools
+
+    # Регистрируем handler для call_tool
+    @server.call_tool()
+    async def handle_call_tool(
+        name: str, arguments: dict[str, typing.Any] | None
+    ) -> list[mcp.types.TextContent | mcp.types.ImageContent | mcp.types.EmbeddedResource]:
+        logger.debug('Вызов тулы %s с аргументами: %s', name, arguments)
+
+        srv = tool_to_server.get(name)
         if not srv:
-            logger.warning('Сервер для тулы %s не найден', tool.name)
-            continue
+            error_msg = f'Тула {name} не найдена'
+            logger.error(error_msg)
+            return [mcp.types.TextContent(type='text', text=f'Error: {error_msg}')]
 
-        # Создаём функцию-обёртку для каждой тулы
-        def make_tool_handler(
-            tool_name: str, server_cfg: ServerConfig
-        ) -> typing.Callable[..., typing.Awaitable[typing.Any]]:
-            async def handler(**kwargs: typing.Any) -> typing.Any:
-                return await call_tool_on_server(server_cfg, tool_name, kwargs)
-
-            return handler
-
-        # Регистрируем тулу в FastMCP
-        server.tool(
-            name=tool.name,
-            description=tool.description or f'Tool {tool.name} from {tool.server_name}',
-        )(make_tool_handler(tool.name, srv))
+        try:
+            result = await call_tool_on_server(srv, name, arguments or {})
+            # Результат от downstream сервера - это dict с ключом 'content'
+            if isinstance(result, dict) and 'content' in result:
+                content_list = result['content']
+                # Конвертируем в MCP типы
+                mcp_content = []
+                for item in content_list:
+                    if item.get('type') == 'text':
+                        mcp_content.append(mcp.types.TextContent(type='text', text=item.get('text', '')))
+                    elif item.get('type') == 'image':
+                        mcp_content.append(
+                            mcp.types.ImageContent(
+                                type='image', data=item.get('data', ''), mimeType=item.get('mimeType', 'image/png')
+                            )
+                        )
+                    elif item.get('type') == 'resource':
+                        mcp_content.append(
+                            mcp.types.EmbeddedResource(
+                                type='resource',
+                                resource=mcp.types.TextResourceContents(
+                                    uri=item['resource'].get('uri', ''),
+                                    mimeType=item['resource'].get('mimeType'),
+                                    text=item['resource'].get('text', ''),
+                                ),
+                            )
+                        )
+                return mcp_content
+            # Если результат не в ожидаемом формате, возвращаем как текст
+            return [mcp.types.TextContent(type='text', text=str(result))]
+        except Exception as e:
+            logger.exception('Ошибка вызова тулы %s', name)
+            return [mcp.types.TextContent(type='text', text=f'Error: {e!s}')]
 
     return server
 
@@ -566,6 +697,28 @@ async def async_main(args: argparse.Namespace) -> None:
         return
 
 
+async def run_proxy_server() -> None:
+    """Запускает proxy сервер."""
+    config = load_config()
+    all_tools = await list_all_tools(config)
+
+    if not all_tools:
+        logger.warning('Не найдено ни одной тулы во всех серверах')
+        return
+
+    if not config.enabled_tools:
+        logger.info('enabled_tools пустой - включаем все тулы')
+
+    proxy = create_proxy_server(config, all_tools)
+
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        await proxy.run(
+            read_stream,
+            write_stream,
+            proxy.create_initialization_options(),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='MCP Proxy Server')
     parser.add_argument('--configure', action='store_true', help='Открыть GUI для выбора тулов')
@@ -582,23 +735,8 @@ def main() -> None:
         asyncio.run(async_main(args))
         return
 
-    # Для запуска MCP сервера - используем синхронный путь
-    config = load_config()
-
-    # Получаем тулы синхронно через asyncio.run
-    all_tools = asyncio.run(list_all_tools(config))
-
-    if not all_tools:
-        logger.warning('Не найдено ни одной тулы во всех серверах')
-        return
-
-    # Если enabled_tools пустой - включаем все тулы
-    if not config.enabled_tools:
-        logger.info('enabled_tools пустой - включаем все тулы')
-
-    # Создаём и запускаем proxy сервер
-    proxy = create_proxy_server(config, all_tools)
-    proxy.run(transport='stdio')
+    # Для запуска MCP сервера
+    anyio.run(run_proxy_server)
 
 
 if __name__ == '__main__':

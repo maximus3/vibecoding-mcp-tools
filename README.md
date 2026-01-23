@@ -192,6 +192,8 @@ MCP Proxy Server агрегирует тулы из нескольких вне�
 - `build_command` — команда сборки (опционально, например: `ya make -r`, `cargo build --release`)
 - `build_cwd` — рабочая директория для сборки (опционально)
 - `args` — аргументы для запуска бинарника
+- `timeout` — таймаут на получение списка тулов в секундах (по умолчанию: 30)
+- `call_timeout` — таймаут на вызов тулы в секундах (по умолчанию: 300)
 - `enabled_tools` — список включённых тулов (пустой = все включены)
 
 ### Использование
@@ -231,17 +233,6 @@ uv run mcp_proxy_server.py
 
 ### Примеры конфигурации
 
-**Arcadia devtools-mcp:**
-```json
-{
-  "name": "arcadia",
-  "binary": "/Users/user/arcadia/devtools/mcp/bin/devtools-mcp",
-  "build_command": "ya make -r",
-  "build_cwd": "/Users/user/arcadia/devtools/mcp/bin",
-  "args": ["--arcadia", "/Users/user/arcadia"]
-}
-```
-
 **Rust проект:**
 ```json
 {
@@ -249,7 +240,9 @@ uv run mcp_proxy_server.py
   "binary": "/path/to/project/target/release/mcp-server",
   "build_command": "cargo build --release",
   "build_cwd": "/path/to/project",
-  "args": []
+  "args": [],
+  "timeout": 30,
+  "call_timeout": 300
 }
 ```
 
@@ -260,7 +253,9 @@ uv run mcp_proxy_server.py
   "binary": "/path/to/project/bin/mcp-server",
   "build_command": "go build -o bin/mcp-server ./cmd/server",
   "build_cwd": "/path/to/project",
-  "args": []
+  "args": [],
+  "timeout": 30,
+  "call_timeout": 300
 }
 ```
 
@@ -271,7 +266,9 @@ uv run mcp_proxy_server.py
   "binary": "/usr/local/bin/mcp-server",
   "build_command": null,
   "build_cwd": null,
-  "args": []
+  "args": [],
+  "timeout": 30,
+  "call_timeout": 300
 }
 ```
 
